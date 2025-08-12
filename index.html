@@ -7,7 +7,7 @@
   <meta name="theme-color" content="#0a1120" media="(prefers-color-scheme: dark)" />
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Mobile RTA (เพิ่มเส้นตั้งพีค + Heatmap + Cursor)</title>
+  <title>Mobile RTA (เพิ่มเส้นตั้งพีค + Heatmap + Cursor + dB-A Meter)</title>
 
   <style>
     :root {
@@ -17,6 +17,7 @@
       --fft:#34d399; --peak:#a78bfa; --hold:#facc15; --bar:#34d399;
       --heatmap-color-1:#0b1220; --heatmap-color-2:#3b82f6; --heatmap-color-3:#22c55e;
       --heatmap-color-4:#facc15; --heatmap-color-5:#ef4444;
+      --dba-meter-bg-start:#34D399; --dba-meter-bg-mid:#FACC15; --dba-meter-bg-mid-hi:#EF4444; --dba-meter-bg-end:#BE123C;
     }
     :root { color-scheme: dark; }
     html{ background:#0a1120; }
@@ -50,6 +51,7 @@
     label{font-size:12px;color:var(--muted)}
     .meters{display:grid;grid-template-columns:1fr;gap:12px}
     canvas{width:100%;height:320px;background:#0b1220;border-radius:12px;touch-action:none}
+    #dbMeterCanvas{ height: 60px; background: transparent; }
     .hint{font-size:12px;color:var(--muted)}
     .kv{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
     .kv div{background:#0e1628;border:1px solid #1f2937;border-radius:12px;padding:8px}
@@ -63,6 +65,8 @@
       white-space:nowrap; z-index: 10;
     }
     .plot{ position:relative; }
+    #dbMeterContainer { position: relative; }
+    .dbLabel { position: absolute; font-size: 10px; color: var(--muted); bottom: 4px; }
   </style>
 </head>
 <body>
@@ -152,6 +156,23 @@
           <div id="heatmapTip" class="tip" style="display:none">—</div>
         </div>
       </div>
+
+      <!-- Meter สำหรับวัดค่า dB-A ที่ปรับปรุงใหม่ -->
+      <div class="card">
+        <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:2px">
+          <b>ความดังรวม dB-A</b>
+          <span class="hint" id="dbMeterValue">—</span>
+        </div>
+        <div id="dbMeterContainer">
+          <canvas id="dbMeterCanvas" width="1200" height="60"></canvas>
+          <span class="dbLabel" style="left: 0;">-40</span>
+          <span class="dbLabel" style="left: 25%;"> -20</span>
+          <span class="dbLabel" style="left: 50%;"> -10</span>
+          <span class="dbLabel" style="left: 75%;"> -5</span>
+          <span class="dbLabel" style="right: 0;">0</span>
+        </div>
+      </div>
+
     </div>
     
     <div class="card kv">
@@ -200,12 +221,15 @@
       const fftCanvas = document.getElementById('fftCanvas');
       const octCanvas = document.getElementById('octCanvas');
       const heatmapCanvas = document.getElementById('heatmapCanvas');
+      const dbMeterCanvas = document.getElementById('dbMeterCanvas');
       const fftTip = document.getElementById('fftTip');
       const octTip = document.getElementById('octTip');
       const heatmapTip = document.getElementById('heatmapTip');
+      const dbMeterValue = document.getElementById('dbMeterValue');
       const ctxFFT = fftCanvas.getContext('2d');
       const ctxOct = octCanvas.getContext('2d');
       const ctxHeatmap = heatmapCanvas.getContext('2d');
+      const ctxDbMeter = dbMeterCanvas.getContext('2d');
       const labelRate = document.getElementById('labelRate');
       const labelOct  = document.getElementById('labelOct');
       const octTitle  = document.getElementById('octTitle');
@@ -240,6 +264,7 @@
       // ==== Helpers ====
       const dbfs = v => 20 * Math.log10(v / 255 + 1e-12);
       const clamp01 = v => Math.min(1, Math.max(0, v));
+      // A-weighting Filter (IEC 61672:2003)
       function aWeighting(f){ const f2=f*f; const ra=(12200**2*f2**2)/((f2+20.6**2)*(f2+12200**2)*Math.sqrt((f2+107.7**2)*(f2+737.9**2))); return 20*Math.log10(ra)+2.0; }
       function fmtHz(f){ return f>=1000 ? ((f/1000>=10? (f/1000).toFixed(0):(f/1000).toFixed(1))+' kHz') : (Math.round(f)+' Hz'); }
       const fmax = () => Math.min(sampleRate / 2, 20000);
@@ -299,6 +324,7 @@
 
       // Pre-calculate heatmap bins for efficiency
       function genHeatmapBins() {
+        if (!analyser) return null;
         const fm = fmax();
         const fpb = sampleRate / analyser.fftSize;
         const logFmin = Math.log10(fmin);
@@ -645,6 +671,58 @@
         rmsEl.textContent = db.toFixed(1) + ' dBFS';
       }
 
+      // ==== ฟังก์ชันใหม่สำหรับมิเตอร์ dB-A ====
+      function calculateDba() {
+        if (!freqArray || !analyser) return -100;
+
+        const N = freqArray.length;
+        const fpb = sampleRate / analyser.fftSize;
+        let sum = 0;
+
+        for (let i = 0; i < N; i++) {
+          const f = i * fpb;
+          const aWeightGain = Math.pow(10, aWeighting(f) / 20);
+          const value = freqArray[i] * aWeightGain;
+          sum += value ** 2;
+        }
+        
+        const rms = Math.sqrt(sum / N);
+        return 20 * Math.log10(rms / 255 + 1e-12); // แปลงเป็น dB
+      }
+
+      // วาดพื้นหลังของมิเตอร์ dB-A (เส้นขอบและฉากหลัง)
+      function drawDbMeterBackground() {
+        const { width: w, height: h } = ctxDbMeter.canvas;
+        ctxDbMeter.clearRect(0, 0, w, h);
+        ctxDbMeter.fillStyle = 'rgba(255,255,255,0.08)'; // สีพื้นหลังจางๆ
+        ctxDbMeter.fillRect(0, 0, w, h);
+      }
+
+      // อัปเดตแถบวัด dB-A แบบเติบโตตามค่า
+      function updateDbMeter(db) {
+        const { width: w, height: h } = ctxDbMeter.canvas;
+        const dbMin = -40, dbMax = 0; 
+        
+        // คำนวณความกว้างของแถบจากค่า dB
+        const width = w * clamp01((db - dbMin) / (dbMax - dbMin));
+        
+        // สร้าง gradient
+        const gradient = ctxDbMeter.createLinearGradient(0, 0, w, 0);
+        gradient.addColorStop(0, getStyle('--dba-meter-bg-start')); // เขียว
+        gradient.addColorStop(0.5, getStyle('--dba-meter-bg-mid')); // เหลือง
+        gradient.addColorStop(0.75, getStyle('--dba-meter-bg-mid-hi')); // แดง
+        gradient.addColorStop(1, getStyle('--dba-meter-bg-end')); // แดงเข้ม
+
+        // วาดพื้นหลังก่อน
+        drawDbMeterBackground();
+        
+        // วาดแถบตามความกว้างที่คำนวณได้
+        ctxDbMeter.fillStyle = gradient;
+        ctxDbMeter.fillRect(0, 0, width, h);
+
+        dbMeterValue.textContent = `${db.toFixed(1)} dB-A`;
+      }
+      
       function loop() {
         if (!running) return;
         analyser.getByteTimeDomainData(dataArray);
@@ -661,14 +739,14 @@
         drawOctave();
         updateRMS();
 
+        const dbA_value = calculateDba(); 
+        updateDbMeter(dbA_value); // อัปเดตแถบ dB-A ทุกเฟรม
+
         const now = performance.now();
         if (heatmapEnabled && (now - lastHeatmapUpdate >= HEATMAP_UPDATE_RATE_MS)) {
           drawHeatmap();
           lastHeatmapUpdate = now;
         } else if (!heatmapEnabled) {
-          // ถ้า heatmap ถูกปิดอยู่ ให้เคลียร์ canvas
-          ctxHeatmap.clearRect(0, 0, heatmapCanvas.width, heatmapCanvas.height);
-          // วาด background และข้อความว่าปิดอยู่
           ctxHeatmap.clearRect(0, 0, heatmapCanvas.width, heatmapCanvas.height);
           drawHeatmapBackground(ctxHeatmap);
           drawOverlayMessage(ctxHeatmap, heatmapCanvas.width, heatmapCanvas.height);
@@ -712,6 +790,8 @@
           heatmapData = [];
           lastHeatmapUpdate = 0;
           running = true;
+
+          drawDbMeterBackground(); // วาดมิเตอร์พื้นหลังครั้งแรก
           loop();
         } catch (err) {
           console.error('เปิดไมโครโฟนไม่สำเร็จ: ' + (err.message || err));
@@ -727,6 +807,8 @@
         if (audioCtx) { audioCtx.close(); }
         btnStart.disabled = false;
         btnStop.disabled = true;
+        // เคลียร์มิเตอร์เมื่อหยุด
+        updateDbMeter(-100);
       }
       
       // จัดการการแตะค้างเพื่อแสดงเส้นประ + ป้าย Hz
@@ -763,6 +845,7 @@
           }
         };
         const clear = () => {
+          pressed = false;
           tipEl.style.display = 'none';
           if (which === 'fft') guideFFT = null;
           else if (which === 'oct') guideOCT = null;
@@ -791,80 +874,25 @@
           update(getX(e));
         };
         const onUp = (_) => {
-          pressed = false;
           clear();
         };
-        canvas.addEventListener('touchstart', onDown, { passive: false });
-        canvas.addEventListener('touchmove', onMove, { passive: false });
-        canvas.addEventListener('touchend', onUp, { passive: true 
-      });
-      canvas.addEventListener('mousedown', onDown, { passive: false });
-      canvas.addEventListener('mousemove', onMove, { passive: false });
-      canvas.addEventListener('mouseup', onUp, { passive: true });
-      canvas.addEventListener('mouseleave', onUp, { passive: true });
-    }
 
-      // ==== Event listeners ====
-      btnStart.addEventListener('click', start);
-      btnStop.addEventListener('click', stop);
-      btnHold.addEventListener('click', () => {
-        holdEnabled = !holdEnabled;
-        btnHold.ariaPressed = holdEnabled;
-        btnHold.textContent = `📌 Hold Peak: ${holdEnabled ? 'ON' : 'OFF'}`;
-      });
-      btnClear.addEventListener('click', () => {
-        peakArray = null;
-        peakOct = null;
-        heatmapData = []; // Clear heatmap data as well
-      });
-      btnToggleHeatmap.addEventListener('click', () => {
-        heatmapEnabled = !heatmapEnabled;
-        btnToggleHeatmap.ariaPressed = heatmapEnabled;
-        btnToggleHeatmap.textContent = `🔥 Heatmap: ${heatmapEnabled ? 'ON' : 'OFF'}`;
-        if (!heatmapEnabled) {
-          // ถ้าปิด heatmap ให้ clear canvas และวาด background + message
-          const w = heatmapCanvas.width;
-          const h = heatmapCanvas.height;
-          ctxHeatmap.clearRect(0, 0, w, h);
-          drawBackground(ctxHeatmap); // ใช้ drawBackground ของ FFT/Octave ได้เลย
-          drawOverlayMessage(ctxHeatmap, w, h);
-        } else {
-          // ถ้าเปิด heatmap ให้วาดทันที
-          lastHeatmapUpdate = 0;
-          drawHeatmap();
-        }
-      });
+        canvas.addEventListener('mousedown', onDown);
+        canvas.addEventListener('mousemove', onMove);
+        canvas.addEventListener('mouseup', onUp);
+        canvas.addEventListener('mouseleave', onUp);
+        canvas.addEventListener('touchstart', onDown, {passive:false});
+        canvas.addEventListener('touchmove', onMove, {passive:false});
+        canvas.addEventListener('touchend', onUp);
+      }
       
-      fftSel.addEventListener('change', () => {
-        if (!analyser) return;
-        analyser.fftSize = parseInt(fftSel.value, 10);
-        dataArray = new Uint8Array(analyser.fftSize);
-        freqArray = new Uint8Array(analyser.frequencyBinCount);
-        peakArray = new Uint8Array(analyser.frequencyBinCount);
-        heatmapFreqBinMap = genHeatmapBins(); // Recalculate heatmap bins
-        heatmapData = [];
-      });
-      smoothing.addEventListener('input', () => {
-        if (!analyser) return;
-        analyser.smoothingTimeConstant = parseFloat(smoothing.value);
-      });
-      octResSel.addEventListener('change', (e) => {
-        octN = parseInt(e.target.value, 10);
-        bands = genBands(octN);
-        peakOct = new Float32Array(bands.length);
-      });
-      
+      // เพิ่มฟังก์ชัน drawHeatmapBackground ที่ขาดไป
       function drawHeatmapBackground(ctx) {
         const {width: w, height: h} = ctx.canvas;
         const plotH = h - PAD.B;
         ctx.clearRect(0, 0, w, h);
-        // แนวตั้ง log ticks
-        ctx.strokeStyle = GRID_V;
-        const ticks = [20, 31.5, 40, 50, 63, 80, 100, 125, 160, 200, 250, 315, 400, 500, 630, 800, 1000, 2000, 4000, 8000, 16000];
-        ticks.forEach(t => {
-          const x = mapLogX(t, w);
-          ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, plotH); ctx.stroke();
-        });
+        ctx.strokeStyle = FRAME;
+        ctx.strokeRect(PAD.L, 0, w - PAD.L - PAD.R, plotH);
         ctx.fillStyle = LABEL;
         ctx.font = '12px system-ui';
         ctx.textBaseline = 'alphabetic';
@@ -872,24 +900,65 @@
           const x = mapLogX(t, w);
           ctx.fillText(t >= 1000 ? (t / 1000) + 'k' : t, x - 8, h - LABEL_Y);
         });
-        // กรอบ
-        ctx.strokeStyle = FRAME;
-        ctx.strokeRect(PAD.L, 0, w - PAD.L - PAD.R, plotH);
       }
+
+      // ==== Event Listeners ====
+      btnStart.onclick = start;
+      btnStop.onclick = stop;
+      btnHold.onclick = () => {
+        holdEnabled = !holdEnabled;
+        btnHold.setAttribute('aria-pressed', holdEnabled);
+        btnHold.textContent = `📌 Hold Peak: ${holdEnabled ? 'ON' : 'OFF'}`;
+      };
+      btnClear.onclick = () => {
+        if (peakArray) peakArray.fill(0);
+        if (peakOct) peakOct.fill(0);
+        if (running) {
+          drawFFT();
+          drawOctave();
+        }
+      };
+      btnToggleHeatmap.onclick = () => {
+        heatmapEnabled = !heatmapEnabled;
+        btnToggleHeatmap.setAttribute('aria-pressed', heatmapEnabled);
+        btnToggleHeatmap.textContent = `🔥 Heatmap: ${heatmapEnabled ? 'ON' : 'OFF'}`;
+        if (running) {
+          if (heatmapEnabled) {
+            heatmapData = [];
+            lastHeatmapUpdate = 0;
+          }
+          drawHeatmap();
+        } else {
+          const w = heatmapCanvas.width;
+          const h = heatmapCanvas.height;
+          ctxHeatmap.clearRect(0, 0, w, h);
+          drawHeatmapBackground(ctxHeatmap);
+          if (!heatmapEnabled) {
+            drawOverlayMessage(ctxHeatmap, w, h);
+          }
+        }
+      };
+      fftSel.onchange = () => {
+        if (analyser) {
+          stop();
+          start();
+        }
+      };
+      octResSel.onchange = () => {
+        octN = parseInt(octResSel.value, 10);
+        bands = genBands(octN);
+      };
       
-      // Init
+      attachPressGuide(fftCanvas, fftTip, 'fft');
+      attachPressGuide(octCanvas, octTip, 'oct');
+      attachPressGuide(heatmapCanvas, heatmapTip, 'heatmap');
+
+      // วาดครั้งแรก
       drawBackground(ctxFFT);
       drawBackground(ctxOct);
       drawHeatmapBackground(ctxHeatmap);
       drawOverlayMessage(ctxHeatmap, heatmapCanvas.width, heatmapCanvas.height);
-      attachPressGuide(fftCanvas, fftTip, 'fft');
-      attachPressGuide(octCanvas, octTip, 'oct');
-      attachPressGuide(heatmapCanvas, heatmapTip, 'heatmap');
-      
-      // Initial state
-      octResSel.value = 6;
-      octN = 6;
-      octTitle.textContent = `RTA แบบ 1/6 Octave (Linear Axis)`;
+      drawDbMeterBackground();
     })();
   </script>
 </body>
