@@ -7,7 +7,7 @@
   <meta name="theme-color" content="#0a1120" media="(prefers-color-scheme: dark)" />
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Mobile RTA (เพิ่มเส้นตั้งพีค + Heatmap + Cursor + dB-A Meter)</title>
+  <title>Mobile RTA (เพิ่มค่าเฉลี่ยและสูงสุด)</title>
 
   <style>
     :root {
@@ -17,7 +17,7 @@
       --fft:#34d399; --peak:#a78bfa; --hold:#facc15; --bar:#34d399;
       --heatmap-color-1:#0b1220; --heatmap-color-2:#3b82f6; --heatmap-color-3:#22c55e;
       --heatmap-color-4:#facc15; --heatmap-color-5:#ef4444;
-      --dba-meter-bg-start:#34D399; --dba-meter-bg-mid:#FACC15; --dba-meter-bg-mid-hi:#EF4444; --dba-meter-bg-end:#BE123C;
+      --dba-meter-bg-0-50:#22c55e; --dba-meter-bg-50-70:#facc15; --dba-meter-bg-70-90:#ef4444; --dba-meter-bg-90-140:#be123c;
     }
     :root { color-scheme: dark; }
     html{ background:#0a1120; }
@@ -45,13 +45,28 @@
     }
     .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
     .card{background:var(--card);border:1px solid #1f2937;border-radius:16px;box-shadow:0 10px 30px rgba(0,0,0,.25);padding:12px}
-    button,select,input[type=range]{-webkit-tap-highlight-color:transparent}
+    button,select,input[type=range],input[type=number]{-webkit-tap-highlight-color:transparent}
     button{background:#10b981;border:none;color:white;padding:10px 14px;border-radius:12px;font-weight:700;cursor:pointer}
     button.secondary{background:#374151} button.ghost{background:#1f2937}
     label{font-size:12px;color:var(--muted)}
     .meters{display:grid;grid-template-columns:1fr;gap:12px}
     canvas{width:100%;height:320px;background:#0b1220;border-radius:12px;touch-action:none}
-    #dbMeterCanvas{ height: 60px; background: transparent; }
+    
+    /* ปรับปรุง CSS สำหรับแถบวัด dB-A */
+    #dbMeterContainer {
+      position: relative;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 999px; /* ทำให้โค้งมน */
+      overflow: hidden; /* ซ่อนส่วนเกินเมื่อบาร์วิ่ง */
+    }
+    #dbMeterCanvas {
+      height: 20px; /* ลดความสูงลงเหลือ 1/3 */
+      background: transparent;
+      border-radius: 999px; /* ทำให้โค้งมน */
+    }
+    
+    .dbLabel { position: absolute; font-size: 10px; color: var(--muted); bottom: 4px; }
+    
     .hint{font-size:12px;color:var(--muted)}
     .kv{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
     .kv div{background:#0e1628;border:1px solid #1f2937;border-radius:12px;padding:8px}
@@ -65,8 +80,6 @@
       white-space:nowrap; z-index: 10;
     }
     .plot{ position:relative; }
-    #dbMeterContainer { position: relative; }
-    .dbLabel { position: absolute; font-size: 10px; color: var(--muted); bottom: 4px; }
   </style>
 </head>
 <body>
@@ -161,23 +174,36 @@
       <div class="card">
         <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:2px">
           <b>ความดังรวม dB-A</b>
-          <span class="hint" id="dbMeterValue">—</span>
+          <button id="btnResetDba" class="secondary" style="font-size:12px;padding:6px 10px;">♻️ Reset AVG/MAX</button>
         </div>
+        
+        <!-- ส่วนแสดงผลใหม่สำหรับ Realtime, AVG, MAX -->
+        <div class="kv" style="margin-bottom: 12px;">
+          <div><b>Realtime (dB-A)</b><span id="dbRealtimeValue">—</span></div>
+          <div><b>AVG (dB-A)</b><span id="dbAvgValue">—</span></div>
+          <div><b>MAX (dB-A)</b><span id="dbMaxValue">—</span></div>
+        </div>
+
         <div id="dbMeterContainer">
-          <canvas id="dbMeterCanvas" width="1200" height="60"></canvas>
-          <span class="dbLabel" style="left: 0;">-40</span>
-          <span class="dbLabel" style="left: 25%;"> -20</span>
-          <span class="dbLabel" style="left: 50%;"> -10</span>
-          <span class="dbLabel" style="left: 75%;"> -5</span>
-          <span class="dbLabel" style="right: 0;">0</span>
+          <canvas id="dbMeterCanvas" width="1200" height="20"></canvas>
+          <span class="dbLabel" style="left: 0%;">0</span>
+          <span class="dbLabel" style="left: 28.57%;">40</span>
+          <span class="dbLabel" style="left: 57.14%;">80</span>
+          <span class="dbLabel" style="left: 85.71%;">120</span>
+          <span class="dbLabel" style="right: 0;">140</span>
         </div>
       </div>
-
     </div>
     
     <div class="card kv">
       <div><b>ระดับ RMS (ดิบ dBFS)</b><span id="rms">—</span></div>
       <div><b>ความถี่พีคโดยประมาณ</b><span id="peak">—</span></div>
+    </div>
+
+    <!-- ส่วนควบคุมใหม่สำหรับ Calibration -->
+    <div class="card row" style="justify-content:space-between;align-items:center;margin-top:0">
+      <div class="hint">ตั้งค่าออฟเซ็ตเพื่อแปลง dBFS เป็น dBA (จากไมค์มือถือ)</div>
+      <label>Calibration Offset (dB) <input id="calibrationOffset" type="number" min="0" step="0.1" value="80" style="width:60px;padding:4px;border-radius:6px;border:1px solid #374151;background:#1f2937;color:white;"></label>
     </div>
 
     <div class="card hint">ข้อจำกัด: ไมค์มือถือมี DSP/AGC และการตอบสนองความถี่ไม่แฟลต ใช้ดูแนว EQ ได้แต่ไม่ใช่มาตรวัด SPL มืออาชีพ</div>
@@ -207,6 +233,7 @@
       const btnHold  = document.getElementById('btnHold');
       const btnClear = document.getElementById('btnClear');
       const btnToggleHeatmap = document.getElementById('btnToggleHeatmap');
+      const btnResetDba = document.getElementById('btnResetDba'); // ปุ่มรีเซ็ตใหม่
       const fftSel   = document.getElementById('fft');
       const smoothing= document.getElementById('smoothing');
       const avgChk   = document.getElementById('avg');
@@ -225,7 +252,13 @@
       const fftTip = document.getElementById('fftTip');
       const octTip = document.getElementById('octTip');
       const heatmapTip = document.getElementById('heatmapTip');
-      const dbMeterValue = document.getElementById('dbMeterValue');
+      
+      // DOM Elements สำหรับค่า dB-A ใหม่
+      const dbRealtimeValue = document.getElementById('dbRealtimeValue');
+      const dbAvgValue = document.getElementById('dbAvgValue');
+      const dbMaxValue = document.getElementById('dbMaxValue');
+
+      const calibrationInput = document.getElementById('calibrationOffset');
       const ctxFFT = fftCanvas.getContext('2d');
       const ctxOct = octCanvas.getContext('2d');
       const ctxHeatmap = heatmapCanvas.getContext('2d');
@@ -261,6 +294,14 @@
       let heatmapEnabled = true;
       let heatmapFreqBinMap = null; // Pre-calculated bins for heatmap
 
+      // Calibration state
+      let calibrationOffset = parseFloat(calibrationInput.value);
+
+      // ตัวแปรใหม่สำหรับ dB-A AVG/MAX
+      let maxDba = -Infinity;
+      let totalDba = 0;
+      let dbaCount = 0;
+
       // ==== Helpers ====
       const dbfs = v => 20 * Math.log10(v / 255 + 1e-12);
       const clamp01 = v => Math.min(1, Math.max(0, v));
@@ -288,7 +329,7 @@
         const plotH = height - PAD.T - PAD.B;
         return PAD.T + (1 - norm) * plotH;
       }
-      // === แก้ไขฟังก์ชันนี้เพื่อทำ Linear Y-axis สำหรับ Octave ===
+      // === ใช้ mapLinearToY แทน mapDbToY สำหรับ Octave ===
       function mapLinearToY(value, height) {
         const norm = clamp01(value / 255); // ค่าจาก 0-255
         const plotH = height - PAD.T - PAD.B;
@@ -673,7 +714,7 @@
 
       // ==== ฟังก์ชันใหม่สำหรับมิเตอร์ dB-A ====
       function calculateDba() {
-        if (!freqArray || !analyser) return -100;
+        if (!freqArray || !analyser) return -Infinity; // Return a very low value
 
         const N = freqArray.length;
         const fpb = sampleRate / analyser.fftSize;
@@ -687,31 +728,31 @@
         }
         
         const rms = Math.sqrt(sum / N);
-        return 20 * Math.log10(rms / 255 + 1e-12); // แปลงเป็น dB
+        const dbfsValue = 20 * Math.log10(rms / 255 + 1e-12);
+        return dbfsValue + calibrationOffset;
       }
 
       // วาดพื้นหลังของมิเตอร์ dB-A (เส้นขอบและฉากหลัง)
       function drawDbMeterBackground() {
         const { width: w, height: h } = ctxDbMeter.canvas;
         ctxDbMeter.clearRect(0, 0, w, h);
-        ctxDbMeter.fillStyle = 'rgba(255,255,255,0.08)'; // สีพื้นหลังจางๆ
-        ctxDbMeter.fillRect(0, 0, w, h);
+        // ไม่ต้องวาดพื้นหลังเพราะถูกจัดการโดย CSS ของ #dbMeterContainer แล้ว
       }
 
       // อัปเดตแถบวัด dB-A แบบเติบโตตามค่า
       function updateDbMeter(db) {
         const { width: w, height: h } = ctxDbMeter.canvas;
-        const dbMin = -40, dbMax = 0; 
+        const dbMin = 0, dbMax = 140; 
         
         // คำนวณความกว้างของแถบจากค่า dB
         const width = w * clamp01((db - dbMin) / (dbMax - dbMin));
         
         // สร้าง gradient
         const gradient = ctxDbMeter.createLinearGradient(0, 0, w, 0);
-        gradient.addColorStop(0, getStyle('--dba-meter-bg-start')); // เขียว
-        gradient.addColorStop(0.5, getStyle('--dba-meter-bg-mid')); // เหลือง
-        gradient.addColorStop(0.75, getStyle('--dba-meter-bg-mid-hi')); // แดง
-        gradient.addColorStop(1, getStyle('--dba-meter-bg-end')); // แดงเข้ม
+        gradient.addColorStop(0, getStyle('--dba-meter-bg-0-50')); // เขียว
+        gradient.addColorStop(0.357, getStyle('--dba-meter-bg-50-70')); // เหลือง
+        gradient.addColorStop(0.5, getStyle('--dba-meter-bg-70-90')); // ส้ม
+        gradient.addColorStop(0.642, getStyle('--dba-meter-bg-90-140')); // แดง
 
         // วาดพื้นหลังก่อน
         drawDbMeterBackground();
@@ -719,10 +760,20 @@
         // วาดแถบตามความกว้างที่คำนวณได้
         ctxDbMeter.fillStyle = gradient;
         ctxDbMeter.fillRect(0, 0, width, h);
-
-        dbMeterValue.textContent = `${db.toFixed(1)} dB-A`;
       }
       
+      // ฟังก์ชันสำหรับรีเซ็ตค่า AVG/MAX ของ dB-A
+      function resetDbaValues() {
+        maxDba = -Infinity;
+        totalDba = 0;
+        dbaCount = 0;
+        dbAvgValue.textContent = '—';
+        dbMaxValue.textContent = '—';
+      }
+      
+      // เพิ่มตัวแปรใหม่สำหรับควบคุมการคำนวณค่าเฉลี่ย
+      let dbaValues = [];
+
       function loop() {
         if (!running) return;
         analyser.getByteTimeDomainData(dataArray);
@@ -739,8 +790,36 @@
         drawOctave();
         updateRMS();
 
-        const dbA_value = calculateDba(); 
-        updateDbMeter(dbA_value); // อัปเดตแถบ dB-A ทุกเฟรม
+        const dbA_value_raw = calculateDba(); 
+        let dbA_value_display = Math.max(0, dbA_value_raw); // ปรับค่า Realtime ให้เป็น 0 หากติดลบ
+        updateDbMeter(dbA_value_display); // อัปเดตแถบ dB-A ทุกเฟรม
+
+        // อัปเดตค่า Realtime, AVG, MAX
+        dbRealtimeValue.textContent = `${dbA_value_display.toFixed(1)} dB-A`;
+
+        // คำนวณค่า MAX
+        if (dbA_value_display > maxDba) {
+          maxDba = dbA_value_display;
+          dbMaxValue.textContent = `${maxDba.toFixed(1)} dB-A`;
+        }
+
+        // คำนวณค่า AVG โดยไม่รวมค่าที่เป็นลบ
+        if (dbA_value_display > 0) {
+            dbaValues.push(dbA_value_display);
+            if (dbaValues.length > 100) dbaValues.shift(); // เก็บค่าล่าสุด 100 ค่า
+            const sumDba = dbaValues.reduce((a, b) => a + b, 0);
+            const avgDba = sumDba / dbaValues.length;
+            dbAvgValue.textContent = `${avgDba.toFixed(1)} dB-A`;
+        }
+        else if (dbaValues.length > 0) { // If there's no sound, but we have an avg value
+             const sumDba = dbaValues.reduce((a, b) => a + b, 0);
+             const avgDba = sumDba / dbaValues.length;
+             dbAvgValue.textContent = `${avgDba.toFixed(1)} dB-A`;
+        }
+        else {
+             dbAvgValue.textContent = '—';
+        }
+
 
         const now = performance.now();
         if (heatmapEnabled && (now - lastHeatmapUpdate >= HEATMAP_UPDATE_RATE_MS)) {
@@ -792,6 +871,7 @@
           running = true;
 
           drawDbMeterBackground(); // วาดมิเตอร์พื้นหลังครั้งแรก
+          resetDbaValues(); // รีเซ็ตค่า dB-A เมื่อเริ่มต้น
           loop();
         } catch (err) {
           console.error('เปิดไมโครโฟนไม่สำเร็จ: ' + (err.message || err));
@@ -808,7 +888,8 @@
         btnStart.disabled = false;
         btnStop.disabled = true;
         // เคลียร์มิเตอร์เมื่อหยุด
-        updateDbMeter(-100);
+        dbRealtimeValue.textContent = '—';
+        updateDbMeter(-Infinity);
       }
       
       // จัดการการแตะค้างเพื่อแสดงเส้นประ + ป้าย Hz
@@ -948,7 +1029,13 @@
         octN = parseInt(octResSel.value, 10);
         bands = genBands(octN);
       };
+
+      calibrationInput.onchange = () => {
+        calibrationOffset = parseFloat(calibrationInput.value) || 0;
+      };
       
+      btnResetDba.onclick = resetDbaValues; // ผูกปุ่มรีเซ็ตใหม่เข้ากับฟังก์ชัน
+
       attachPressGuide(fftCanvas, fftTip, 'fft');
       attachPressGuide(octCanvas, octTip, 'oct');
       attachPressGuide(heatmapCanvas, heatmapTip, 'heatmap');
@@ -958,7 +1045,7 @@
       drawBackground(ctxOct);
       drawHeatmapBackground(ctxHeatmap);
       drawOverlayMessage(ctxHeatmap, heatmapCanvas.width, heatmapCanvas.height);
-      drawDbMeterBackground();
+      updateDbMeter(-Infinity); // เรียกวาดมิเตอร์ครั้งแรกให้เป็นค่าว่าง
     })();
   </script>
 </body>
