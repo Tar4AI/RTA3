@@ -108,7 +108,7 @@
     <div class="card">
       <div class="row" style="justify-content:space-between">
         <div>
-          <h2 style="margin:0 0 4px 0">Mobile RTA (เพิ่มเส้นตั้งพีค + Heatmap)</h2>
+          <h2 style="margin:0 0 4px 0">my RTAs</h2>
           <div class="hint">แกน X = Log (20 Hz → 20 kHz) • Heatmap แสดงความถี่ในอดีต</div>
         </div>
         <div class="row">
@@ -689,15 +689,13 @@
         ctxDbMeter.fillStyle = gradient;
         ctxDbMeter.fillRect(0, 0, width, h);
       }
-      // === แก้ไขฟังก์ชันรีเซ็ตที่นี่ ===
       function resetDbaValues() {
         maxDba = -Infinity;
         dbaValues = [];
-        dbRealtimeValue.textContent = '—'; // เพิ่มบรรทัดนี้เพื่อให้ค่า Realtime ถูกรีเซ็ตทันที
+        dbRealtimeValue.textContent = '—';
         dbAvgValue.textContent = '—';
         dbMaxValue.textContent = '—';
       }
-      // ===========================
       function loop() {
         if (!running) return;
         analyser.getByteTimeDomainData(dataArray);
@@ -717,26 +715,31 @@
         let dbA_value_display = Math.max(0, dbA_value_raw);
         updateDbMeter(dbA_value_display);
 
-        // === แก้ไขลอจิกการแสดงผลค่า dB-A ที่นี่ ===
         if (dbaValues.length === 0) {
-          dbRealtimeValue.textContent = '—';
-          dbAvgValue.textContent = '—';
-          dbMaxValue.textContent = '—';
+          if (dbA_value_display > 0) {
+            dbaValues.push(dbA_value_display);
+            dbRealtimeValue.textContent = `${dbA_value_display.toFixed(1)} dB-A`;
+            dbMaxValue.textContent = `${dbA_value_display.toFixed(1)} dB-A`;
+            dbAvgValue.textContent = `${dbA_value_display.toFixed(1)} dB-A`;
+            maxDba = dbA_value_display;
+          } else {
+            dbRealtimeValue.textContent = '—';
+            dbAvgValue.textContent = '—';
+            dbMaxValue.textContent = '—';
+          }
         } else {
           dbRealtimeValue.textContent = `${dbA_value_display.toFixed(1)} dB-A`;
           if (dbA_value_display > maxDba) {
             maxDba = dbA_value_display;
             dbMaxValue.textContent = `${maxDba.toFixed(1)} dB-A`;
           }
+          if (dbA_value_display > 0) {
+            dbaValues.push(dbA_value_display);
+            if (dbaValues.length > 100) dbaValues.shift();
+          }
           const sumDba = dbaValues.reduce((a, b) => a + b, 0);
           const avgDba = sumDba / dbaValues.length;
           dbAvgValue.textContent = `${avgDba.toFixed(1)} dB-A`;
-        }
-        // ============================================
-
-        if (dbA_value_display > 0) {
-            dbaValues.push(dbA_value_display);
-            if (dbaValues.length > 100) dbaValues.shift();
         }
         
         const now = performance.now();
